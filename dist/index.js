@@ -1,106 +1,109 @@
 import { WebSocketServer, WebSocket } from "ws";
-const wss = new WebSocketServer({ port: 8080 });
+import express from "express";
+import { createServer } from "http";
+const app = express();
+app.get("/", (_req, res) => {
+    res.status(200).send("WebTalk WebSocket server is running (chat + audio)");
+});
+const server = createServer(app);
+const wss = new WebSocketServer({ server });
 let allSockets = [];
+/** Broadcast current user count to all users in a room */
 function broadcastUserCount(roomId) {
-    const count = allSockets.filter(u => u.room == roomId).length;
+    const count = allSockets.filter((u) => u.room === roomId).length;
     allSockets
-        .filter(u => u.room == roomId)
-        .forEach(u => {
+        .filter((u) => u.room === roomId)
+        .forEach((u) => {
         u.socket.send(JSON.stringify({
             type: "userCount",
-            payload: {
-                count
-            }
+            payload: { count },
         }));
     });
 }
+/** Heartbeat for keeping connections alive */
+function heartbeat() {
+    // @ts-ignore
+    this.isAlive = true;
+}
 wss.on("connection", (socket) => {
+    // @ts-ignore
+    socket.isAlive = true;
+    socket.on("pong", heartbeat);
     socket.on("message", (message) => {
         const parsedMessage = JSON.parse(message.toString());
-        if (parsedMessage.type == 'join') {
-            console.log("user joined room" + parsedMessage.payload.roomId);
+        // User joins a room
+        if (parsedMessage.type === "join") {
             const userId = Math.random().toString(36).substring(2, 10);
             allSockets.push({
                 socket,
                 room: parsedMessage.payload.roomId,
-                id: userId
+                id: userId,
             });
             socket.send(JSON.stringify({
                 type: "id",
-                payload: {
-                    senderId: userId
-                }
+                payload: { senderId: userId },
             }));
             broadcastUserCount(parsedMessage.payload.roomId);
+            return;
         }
-        if (parsedMessage.type == 'chat') {
-            console.log("user wants to chat");
-            let currentUserRoom = null;
-            let senderId = null;
-            for (let i = 0; i < allSockets.length; i++) {
-                if (allSockets[i]?.socket == socket) {
-                    currentUserRoom = allSockets[i]?.room;
-                    senderId = allSockets[i]?.id;
-                }
-            }
-            for (let i = 0; i < allSockets.length; i++) {
-                if (allSockets[i]?.room == currentUserRoom) {
-                    allSockets[i]?.socket.send(JSON.stringify({
-                        type: "chat",
-                        payload: {
-                            senderId,
-                            message: parsedMessage.payload.message
-                        }
-                    }));
-                }
-            }
-        }
-        // VOICE CALL SIGNALING
-        if (parsedMessage.type == "voice-offer") {
-            const sender = allSockets.find(u => u.socket == socket);
-            if (sender) {
-                allSockets
-                    .filter(u => u.room == sender.room && u.id !== sender.id)
-                    .forEach(u => {
-                    u.socket.send(JSON.stringify({
-                        type: "voice-offer",
-                        offer: parsedMessage.offer,
-                        from: sender.id
-                    }));
-                });
-            }
-        }
-        if (parsedMessage.type === "voice-answer") {
-            // Send answer back to original caller
-            const target = allSockets.find(u => u.id === parsedMessage.to);
-            if (target) {
-                target.socket.send(JSON.stringify({
-                    type: "voice-answer",
-                    answer: parsedMessage.answer,
-                    from: parsedMessage.from
+        // Chat messaging inside a room
+        if (parsedMessage.type === "chat") {
+            const sender = allSockets.find((u) => u.socket === socket);
+            if (!sender)
+                return;
+            allSockets
+                .filter((u) => u.room === sender.room)
+                .forEach((u) => {
+                u.socket.send(JSON.stringify({
+                    type: "chat",
+                    payload: {
+                        senderId: sender.id,
+                        message: parsedMessage.payload.message,
+                    },
                 }));
-            }
+            });
+            return;
         }
-        if (parsedMessage.type === "voice-candidate") {
-            // Send ICE candidates to the right peer
-            const target = allSockets.find(u => u.id === parsedMessage.to);
-            if (target) {
-                target.socket.send(JSON.stringify({
-                    type: "voice-candidate",
-                    candidate: parsedMessage.candidate,
-                    from: parsedMessage.from
+        // Audio messaging inside a room
+        if (parsedMessage.type === "audio") {
+            const sender = allSockets.find((u) => u.socket === socket);
+            if (!sender)
+                return;
+            allSockets
+                .filter((u) => u.room === sender.room)
+                .forEach((u) => {
+                u.socket.send(JSON.stringify({
+                    type: "audio",
+                    payload: {
+                        senderId: sender.id,
+                        audio: parsedMessage.payload.audio, // base64 string or blob
+                    },
                 }));
-            }
+            });
+            return;
         }
     });
     socket.on("close", () => {
-        const user = allSockets.find(u => u.socket == socket);
+        const user = allSockets.find((u) => u.socket === socket);
         if (user) {
             const roomId = user.room;
-            allSockets = allSockets.filter(u => u.socket !== socket);
+            allSockets = allSockets.filter((u) => u.socket !== socket);
             broadcastUserCount(roomId);
         }
     });
 });
-console.log("server running on ws://localhost:8080");
+/** Ping/pong for dead connections */
+const interval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+        if (ws.isAlive === false)
+            return ws.terminate();
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 30000);
+wss.on("close", () => clearInterval(interval));
+const PORT = process.env.PORT || 8080;
+server.listen(PORT, () => {
+    console.log(`Chat + Audio WS server running on ${PORT}`);
+});
 //# sourceMappingURL=index.js.map
