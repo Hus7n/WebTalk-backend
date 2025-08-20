@@ -91,7 +91,7 @@ wss.on("connection", (socket) => {
     }
 
     // Audio messaging inside a room
-    if (parsedMessage.type === "audio") {
+    if (parsedMessage.type === "audio-message") {
       const sender = allSockets.find((u) => u.socket === socket);
       if (!sender) return;
 
@@ -100,7 +100,7 @@ wss.on("connection", (socket) => {
         .forEach((u) => {
           u.socket.send(
             JSON.stringify({
-              type: "audio",
+              type: "audio-message",
               payload: {
                 senderId: sender.id,
                 audio: parsedMessage.payload.audio, // base64 string or blob
